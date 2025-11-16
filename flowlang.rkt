@@ -145,6 +145,47 @@
     (define-values (vals e1 s1 n1) (eval-list es env store next))
     (result vals e1 s1 n1)]
 
+        [(list* 'obj specs)
+    (define h (make-hasheq)) (define proto #f)
+    (define (handle-spec sp e s n)
+      (match sp
+        [(list 'proto e1)
+          (define-values (vo e2 s2 n2) (eval* e1 e s n))
+          (unless (objV? vo) (error 'obj "proto debe ser objeto"))
+          (set! proto vo)
+          (values 'ok e2 s2 n2)]
+        [(list (? symbol? k) e1)
+          (define-values (v e2 s2 n2) (eval* e1 e s n))
+          (hash-set! h k v)
+          (values 'ok e2 s2 n2)]
+        [else (error 'obj (format "spec mal formada: ~a" sp))]))
+    (define-values (_ e1 s1 n1)
+      (let loop ((rest specs) (e env) (s store) (n next))
+        (if (null? rest)
+            (values 'ok e s n)
+            (call-with-values
+                (λ () (handle-spec (car rest) e s n))
+              (λ (_ e2 s2 n2)
+                (loop (cdr rest) e2 s2 n2))))))
+    (result (obj h proto) e1 s1 n1)]
+
+    [(list 'get o (? symbol? k))
+    (define-values (vo e1 s1 n1) (eval* o env store next))
+    (result (obj-get vo k) e1 s1 n1)]
+
+    [(list 'set-field! o (? symbol? k) e)
+    (define-values (vo e1 s1 n1) (eval* o env store next))
+    (unless (objV? vo) (error 'set-field! "no es objeto"))
+    (define-values (vv e2 s2 n2) (eval* e e1 s1 n1))
+    (hash-set! (obj-fields vo) k vv)
+    (result vv e2 s2 n2)]
+
+    [(list 'clone o)
+    (define-values (vo e1 s1 n1) (eval* o env store next))
+    (unless (objV? vo) (error 'clone "no es objeto"))
+    (result (obj (make-hasheq) vo) e1 s1 n1)]
+
+
     [(list 'const* bindings)
     (eval-const-bindings bindings env store next)]
 
@@ -420,4 +461,12 @@
           (define-values (v env1 s1 n1) (eval* expr e s n))
           (define-values (loc n2) (store-alloc s1 n1 v))
           (loop (cdr bs) (env-extend env1 x (binding loc #f)) s1 n2)))))
+
+    (define (obj-get o k)
+    (unless (objV? o) (error 'get "no es objeto"))
+    (define fields (obj-fields o))
+    (cond
+     [(hash-has-key? fields k) (hash-ref fields k)]
+     [(obj-proto o) => (λ (p) (obj-get p k))]
+     [else 'null]))
 
