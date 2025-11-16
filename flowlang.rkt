@@ -145,6 +145,19 @@
     (define-values (vals e1 s1 n1) (eval-list es env store next))
     (result vals e1 s1 n1)]
 
+    [(list 'const* bindings)
+    (eval-const-bindings bindings env store next)]
+
+    [(list 'const (? symbol? x) e)
+    (eval-const-bindings (list (make-binding-entry x e)) env store next)]
+
+    [(list 'set (? symbol? x) e)
+    (define b (env-lookup env x))
+    (unless (binding-mutable? b) (error 'set "no se puede asignar a const ~a" x))
+    (define-values (v1 env1 s1 n1) (eval* e env store next))
+    (store-set! s1 (binding-loc b) v1)
+    (result v1 env1 s1 n1)]
+
     [(list* 'call f args)
     (define-values (vf e1 s1 n1) (eval* f env store next))
     (apply-call vf args e1 s1 n1 #f)]
@@ -396,4 +409,15 @@
         [(symbol? k) k]
         [(string? k) (string->symbol k)]
         [else (error who (format "clave inválida: ~a" k))]))
+
+    (define (eval-const-bindings bindings env store next)
+     (let loop ((bs bindings) (e env) (s store) (n next))
+     (if (null? bs)
+        (result 'ok e s n)
+        (let* ([entry (car bs)]
+               [x (binding-id entry)]
+               [expr (binding-expr entry)])
+          (define-values (v env1 s1 n1) (eval* expr e s n))
+          (define-values (loc n2) (store-alloc s1 n1 v))
+          (loop (cdr bs) (env-extend env1 x (binding loc #f)) s1 n2)))))
 
