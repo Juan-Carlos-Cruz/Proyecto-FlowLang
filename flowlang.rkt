@@ -145,6 +145,12 @@
     (define-values (vals e1 s1 n1) (eval-list es env store next))
     (result vals e1 s1 n1)]
 
+    [(list* 'call-method base field args)
+    (define-values (vo e1 s1 n1) (eval* base env store next))
+    (unless (objV? vo) (error 'call-method "receptor no es objeto"))
+    (define method (obj-get vo field))
+    (apply-call method args e1 s1 n1 vo)]
+
         [(list* 'obj specs)
     (define h (make-hasheq)) (define proto #f)
     (define (handle-spec sp e s n)
@@ -436,11 +442,41 @@
     [else (error 'call (format "función/primitiva desconocida: ~a" f))]))
 
 
-    (define (apply-call vf args env store next maybe-this)
-    (cond
-        [(closure? vf)
-        (error 'call "closures aún no implementadas")]
-        [else (eval-prim-call vf args env store next)]))
+  (define (apply-call vf args env store next maybe-this)
+  (cond
+    [(closure? vf)
+     (define c vf)
+     (define argvals '()) (define argrefs '())
+     (let loopA ((as args) (e env) (s store) (n next) (av '()) (ar '()))
+       (if (null? as)
+           (begin
+             (set! argvals (reverse av))
+             (set! argrefs (reverse ar))
+             (values 'ok e s n))
+           (let* ([a (car as)])
+             (let-values ([(v e2 s2 n2 ref) (eval-arg a e s n)])
+               (loopA (cdr as) e2 s2 n2 (cons v av) (cons ref ar))))))
+     (define base-env (closure-env c))
+     (define-values (env-with-this next-after-this)
+       (if maybe-this
+           (let-values ([(loc n2) (store-alloc store next maybe-this)])
+             (values (env-extend base-env 'this (binding loc #f)) n2))
+           (values base-env next)))
+     (define argvals-vec (list->vector argvals))
+     (define argrefs-vec (list->vector argrefs))
+     (define-values (env-call next-after-params)
+       (for/fold ([env0 env-with-this] [n0 next-after-this])
+                 ([param (in-list (closure-params c))] [i (in-naturals)])
+         (define v (vector-ref argvals-vec i))
+         (define ref (vector-ref argrefs-vec i))
+         (define-values (loc n1) (ensure-param-location v ref store n0))
+         (values (env-extend env0 param (binding loc #t)) n1)))
+     (let-values ([(body-result env2 s2 n2) (eval* (closure-body c) env-call store next-after-params)])
+       (if (return-signal? body-result)
+           (values (return-signal-value body-result) env2 s2 n2)
+           (values body-result env2 s2 n2)))]
+    [else (eval-prim-call vf args env store next)]))
+
 
     (define (ensure-dict who v)
     (unless (dictV? v) (error who "no es diccionario")))
@@ -469,4 +505,34 @@
      [(hash-has-key? fields k) (hash-ref fields k)]
      [(obj-proto o) => (λ (p) (obj-get p k))]
      [else 'null]))
+
+   (define (eval-arg expr env store next)
+    (match expr
+    [(? symbol? x)
+     (define b (env-lookup env x))
+     (define val (store-ref store (binding-loc b)))
+     (values val env store next (list 'loc (binding-loc b)))]
+    [(list 'get base (? symbol? field))
+     (define-values (obj env1 store1 next1) (eval* base env store next))
+     (unless (objV? obj) (error 'get "no es objeto"))
+     (values (obj-get obj field) env1 store1 next1 (list 'field obj field))]
+    [else
+     (define-values (val env1 store1 next1) (eval* expr env store next))
+     (values val env1 store1 next1 #f)]))
+
+    (define (ensure-param-location value ref store next)
+      (define (alloc-new v s n)
+        (store-alloc s n v))
+      (cond
+        [(and ref (compound? value))
+        (match ref
+          [(list 'loc locnum) (values locnum next)]
+          [(list 'field obj field-id)
+            (define-values (loc n2) (store-alloc store next value))
+            (attach-location-watcher! loc (λ (nv) (hash-set! (obj-fields obj) field-id nv)))
+            (values loc n2)]
+          [else (alloc-new value store next)])]
+        [else (alloc-new value store next)]))
+
+
 
