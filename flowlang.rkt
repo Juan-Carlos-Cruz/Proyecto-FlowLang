@@ -148,6 +148,29 @@
     [(list* 'call f args)
     (define-values (vf e1 s1 n1) (eval* f env store next))
     (apply-call vf args e1 s1 n1 #f)]
+    [(list* 'dict pairs)
+    (define h (make-hasheq))
+    (define (add-pair p e s n)
+    (match p
+        [(list (? symbol? k) e1)
+        (define-values (v e2 s2 n2) (eval* e1 e s n))
+        (hash-set! h k v)
+        (values 'ok e2 s2 n2)]
+        [else (error 'dict (format "par mal formado: ~a" p))]))
+    (define-values (_ e1 s1 n1)
+    (let loop ((rest pairs) (e env) (s store) (n next))
+        (if (null? rest)
+            (values 'ok e s n)
+            (call-with-values
+                (λ () (add-pair (car rest) e s n))
+            (λ (_ e2 s2 n2)
+                (loop (cdr rest) e2 s2 n2))))))
+    (result h e1 s1 n1)]
+
+    [(list 'print es ...)
+    (define-values (vals e1 s1 n1) (eval-list es env store next))
+    (for ([v vals]) (displayln v))
+    (result (if (null? vals) 'null (last vals)) e1 s1 n1)]
 
     [(list 'var* bindings)
      (eval-var-bindings bindings env store next)]
@@ -272,12 +295,105 @@
         (values newL e3 s3 n3)]
        [else (error 'set-list "uso: (call set-list lista indice valor)")])]
     
+    ['crear-diccionario
+ (define h (make-hasheq))
+ (define (loop rest e s n)
+   (cond
+     [(null? rest) (values h e s n)]
+     [(null? (cdr rest)) (error 'crear-diccionario "se requieren pares clave/valor")]
+     [else
+      (define-values (k e1 s1 n1) (eval1 (car rest) e s n))
+      (define-values (v e2 s2 n2) (eval1 (cadr rest) e1 s1 n1))
+      (hash-set! h (dict-key 'crear-diccionario k) v)
+      (loop (cddr rest) e2 s2 n2)]))
+ (loop args env store next)]
+
+    ['diccionario?
+    (match args
+    [(list expr)
+        (define-values (v e1 s1 n1) (eval1 expr env store next))
+        (values (dictV? v) e1 s1 n1)]
+    [else (error 'diccionario? "uso: (call diccionario? valor)")])]
+
+    ['ref-diccionario
+    (match args
+    [(list dic-expr key-expr)
+        (define-values (vD e1 s1 n1) (eval1 dic-expr env store next))
+        (ensure-dict 'ref-diccionario vD)
+        (define-values (vK e2 s2 n2) (eval1 key-expr e1 s1 n1))
+        (values (hash-ref vD (dict-key 'ref-diccionario vK) 'null) e2 s2 n2)]
+    [else (error 'ref-diccionario "uso: (call ref-diccionario dic clave)")])]
+
+    ['set-diccionario
+    (match args
+    [(list dic-expr key-expr val-expr)
+        (define-values (vD e1 s1 n1) (eval1 dic-expr env store next))
+        (ensure-dict 'set-diccionario vD)
+        (define-values (vK e2 s2 n2) (eval1 key-expr e1 s1 n1))
+        (define-values (vVal e3 s3 n3) (eval1 val-expr e2 s2 n2))
+        (hash-set! vD (dict-key 'set-diccionario vK) vVal)
+        (maybe-update-symbol! e3 s3 dic-expr vD)
+        (values vD e3 s3 n3)]
+    [else (error 'set-diccionario "uso: (call set-diccionario dic clave valor)")])]
+
+    ['claves
+    (match args
+    [(list dic-expr)
+        (define-values (vD e1 s1 n1) (eval1 dic-expr env store next))
+        (ensure-dict 'claves vD)
+        (values (hash-keys vD) e1 s1 n1)]
+    [else (error 'claves "uso: (call claves diccionario)")])]
+
+    ['valores
+    (match args
+    [(list dic-expr)
+        (define-values (vD e1 s1 n1) (eval1 dic-expr env store next))
+        (ensure-dict 'valores vD)
+        (values (hash-values vD) e1 s1 n1)]
+    [else (error 'valores "uso: (call valores diccionario)")])]
+
+    ['longitud
+    (match args
+    [(list expr)
+        (define-values (v e1 s1 n1) (eval1 expr env store next))
+        (unless (string? v) (error 'longitud "esperaba cadena"))
+        (values (string-length v) e1 s1 n1)]
+    [else (error 'longitud "uso: (call longitud cadena)")])]
+
+    ['concatenar
+    (match args
+    [(list a b)
+        (define-values (va e1 s1 n1) (eval1 a env store next))
+        (define-values (vb e2 s2 n2) (eval1 b e1 s1 n1))
+        (unless (and (string? va) (string? vb)) (error 'concatenar "esperaba dos cadenas"))
+        (values (string-append va vb) e2 s2 n2)]
+    [else (error 'concatenar "uso: (call concatenar cad1 cad2)")])]
+
+    ['print
+    (define-values (vals e1 s1 n1)
+    (let loop ((rest args) (acc '()) (e env) (s store) (n next))
+        (if (null? rest)
+            (values (reverse acc) e s n)
+            (let-values ([(v e2 s2 n2) (eval1 (car rest) e s n)])
+            (loop (cdr rest) (cons v acc) e2 s2 n2)))))
+    (for ([v vals]) (displayln v))
+    (values (if (null? vals) 'null (last vals)) e1 s1 n1)]
+    
     [else (error 'call (format "función/primitiva desconocida: ~a" f))]))
 
 
-(define (apply-call vf args env store next maybe-this)
-  (cond
-    [(closure? vf)
-     (error 'call "closures aún no implementadas")]
-    [else (eval-prim-call vf args env store next)]))
+    (define (apply-call vf args env store next maybe-this)
+    (cond
+        [(closure? vf)
+        (error 'call "closures aún no implementadas")]
+        [else (eval-prim-call vf args env store next)]))
+
+    (define (ensure-dict who v)
+    (unless (dictV? v) (error who "no es diccionario")))
+
+    (define (dict-key who k)
+    (cond
+        [(symbol? k) k]
+        [(string? k) (string->symbol k)]
+        [else (error who (format "clave inválida: ~a" k))]))
 
