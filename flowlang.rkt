@@ -140,6 +140,14 @@
     [(list 'program es ...) (eval-seq es env store next #t)]
     [(list 'block es ...)   (eval-seq es env store next #f)]
     [(list 'begin es ...)   (eval-seq-flat es env store next)]
+    
+    [(list 'list es ...)
+    (define-values (vals e1 s1 n1) (eval-list es env store next))
+    (result vals e1 s1 n1)]
+
+    [(list* 'call f args)
+    (define-values (vf e1 s1 n1) (eval* f env store next))
+    (apply-call vf args e1 s1 n1 #f)]
 
     [(list 'var* bindings)
      (eval-var-bindings bindings env store next)]
@@ -157,3 +165,119 @@
      (result ast env store next)]
 
     [else (error 'eval (format "AST no reconocido: ~a" ast))]))
+
+    (define (ensure-list who v)
+  (unless (listV? v) (error who "no es lista")))
+
+(define (valid-index? idx)
+  (and (integer? idx) (>= idx 0)))
+
+(define (list-ref-safely lst idx)
+  (if (valid-index? idx)
+      (let loop ((xs lst) (i idx))
+        (cond
+          [(null? xs) 'null]
+          [(zero? i) (car xs)]
+          [else (loop (cdr xs) (sub1 i))]))
+      'null))
+
+(define (list-replace lst idx val who)
+  (unless (valid-index? idx) (error who "índice inválido: ~a" idx))
+  (let loop ((xs lst) (i idx))
+    (cond
+      [(null? xs) (error who "índice fuera de rango: ~a" idx)]
+      [(zero? i) (cons val (cdr xs))]
+      [else (cons (car xs) (loop (cdr xs) (sub1 i)))])))
+
+(define (update-symbol-binding! env store name value)
+  (define b (env-lookup env name))
+  (store-set! store (binding-loc b) value))
+
+(define (maybe-update-symbol! env store expr value)
+  (when (symbol? expr)
+    (update-symbol-binding! env store expr value)))
+
+(define (eval-prim-call f args env store next)
+  (define (eval1 e env store next) (eval* e env store next))
+  
+  (match f
+    ['vacio?
+     (match args
+       [(list L)
+        (define-values (vL e1 s1 n1) (eval1 L env store next))
+        (ensure-list 'vacio? vL)
+        (values (null? vL) e1 s1 n1)]
+       [else (error 'vacio? "uso: (call vacio? lista)")])]
+    
+    ['crear-lista
+     (match args
+       [(list elem lst-expr)
+        (define-values (vE e1 s1 n1) (eval1 elem env store next))
+        (define-values (vL e2 s2 n2) (eval1 lst-expr e1 s1 n1))
+        (ensure-list 'crear-lista vL)
+        (values (cons vE vL) e2 s2 n2)]
+       [else (error 'crear-lista "uso: (call crear-lista elem lista)")])]
+    
+    ['lista?
+     (match args
+       [(list expr)
+        (define-values (v e1 s1 n1) (eval1 expr env store next))
+        (values (listV? v) e1 s1 n1)]
+       [else (error 'lista? "uso: (call lista? valor)")])]
+    
+    ['cabeza
+     (match args
+       [(list lst-expr)
+        (define-values (vL e1 s1 n1) (eval1 lst-expr env store next))
+        (ensure-list 'cabeza vL)
+        (values (if (null? vL) 'null (car vL)) e1 s1 n1)]
+       [else (error 'cabeza "uso: (call cabeza lista)")])]
+    
+    ['cola
+     (match args
+       [(list lst-expr)
+        (define-values (vL e1 s1 n1) (eval1 lst-expr env store next))
+        (ensure-list 'cola vL)
+        (values (if (null? vL) '() (cdr vL)) e1 s1 n1)]
+       [else (error 'cola "uso: (call cola lista)")])]
+
+    ['append
+     (match args
+       [(list a b)
+        (define-values (vA e1 s1 n1) (eval1 a env store next))
+        (define-values (vB e2 s2 n2) (eval1 b e1 s1 n1))
+        (ensure-list 'append vA)
+        (ensure-list 'append vB)
+        (values (append vA vB) e2 s2 n2)]
+       [else (error 'append "uso: (call append lista1 lista2)")])]
+
+    ['ref-list
+     (match args
+       [(list lst-expr idx-expr)
+        (define-values (vL e1 s1 n1) (eval1 lst-expr env store next))
+        (ensure-list 'ref-list vL)
+        (define-values (vIdx e2 s2 n2) (eval1 idx-expr e1 s1 n1))
+        (values (list-ref-safely vL vIdx) e2 s2 n2)]
+       [else (error 'ref-list "uso: (call ref-list lista indice)")])]
+
+    ['set-list
+     (match args
+       [(list lst-expr idx-expr val-expr)
+        (define-values (vL e1 s1 n1) (eval1 lst-expr env store next))
+        (ensure-list 'set-list vL)
+        (define-values (vIdx e2 s2 n2) (eval1 idx-expr e1 s1 n1))
+        (define-values (vVal e3 s3 n3) (eval1 val-expr e2 s2 n2))
+        (define newL (list-replace vL vIdx vVal 'set-list))
+        (maybe-update-symbol! e3 s3 lst-expr newL)
+        (values newL e3 s3 n3)]
+       [else (error 'set-list "uso: (call set-list lista indice valor)")])]
+    
+    [else (error 'call (format "función/primitiva desconocida: ~a" f))]))
+
+
+(define (apply-call vf args env store next maybe-this)
+  (cond
+    [(closure? vf)
+     (error 'call "closures aún no implementadas")]
+    [else (eval-prim-call vf args env store next)]))
+
