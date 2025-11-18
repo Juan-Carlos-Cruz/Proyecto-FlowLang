@@ -314,7 +314,8 @@
 (define (add-minus-tail expr) (lambda (left) (make-binop '- left expr)))
 (define (term-node first tails) (fold-left first tails))
 (define (mul-times-tail expr) (lambda (left) (make-binop '* left expr)))
-(define (mul-div-tail expr) (lambda (left) (make-binop '/ left expr)))
+(define (mul-div-tail expr)   (lambda (left) (make-binop '/ left expr)))
+(define (mul-mod-tail expr)   (lambda (left) (make-binop '% left expr)))
 (define (unary-not-node expr) `(call not ,expr))
 (define (unary-neg-node expr) (make-neg expr))
 (define (unary-primary-node expr) expr)
@@ -433,6 +434,7 @@
      (term (unary (arbno mul-tail)) term-node)
      (mul-tail ("*" unary) mul-times-tail)
      (mul-tail ("/" unary) mul-div-tail)
+     (mul-tail ("%" unary) mul-mod-tail)
 
      (unary ("!" unary) unary-not-node)
      (unary ("-" unary) unary-neg-node)
@@ -827,7 +829,13 @@
        [(list a b)
         (define-values (va e1 s1 n1) (eval1 a env store next))
         (define-values (vb e2 s2 n2) (eval1 b e1 s1 n1))
-        (values (remainder va vb) e2 s2 n2)]
+        (unless (and (number? va) (number? vb))
+          (error '% "esperaba números"))
+        (define rem
+          (if (and (integer? va) (integer? vb))
+              (remainder va vb)
+              (- va (* vb (truncate (/ va vb))))))
+        (values rem e2 s2 n2)]
        [else (error '% "uso: (call % a b)")])]
     ['//
      (match args
