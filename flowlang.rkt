@@ -261,9 +261,12 @@
          (define-values (loc n1) (ensure-param-location v ref store n0))
          (values (env-extend env0 param (binding loc #t)) n1)))
      (let-values ([(body-result env2 s2 n2) (eval* (closure-body c) env-call store next-after-params)])
-       (if (return-signal? body-result)
-           (values (return-signal-value body-result) env2 s2 n2)
-           (values body-result env2 s2 n2)))]
+        (define result-value
+         (if (return-signal? body-result)
+             (return-signal-value body-result)
+             body-result))
+      
+       (values result-value env s2 n2))]
     [else (eval-prim-call vf args env store next)]))
 
 (define (program-node stmts) (make-program stmts))
